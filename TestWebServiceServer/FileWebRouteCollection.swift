@@ -33,9 +33,6 @@ extension Gallery {
 
 struct FileWebRouteCollection: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        routes.get { request -> String in
-            return "Hello"
-        }
         routes.get("images") { request in
             print("server baseURL \(request.baseUrl)")
             return Gallery.createDummyGallery(with: request.baseUrl.appending("/image/"))

@@ -8,6 +8,11 @@
 import Foundation
 import Vapor
 import Network
+import NIOSSL
+
+extension Environment {
+    static var tls: Environment { .custom(name: "tls") }
+}
 
 class FileServer: ObservableObject {
     private var app: Application
@@ -19,7 +24,7 @@ class FileServer: ObservableObject {
     init(host: String?, port: Int) {
         self.host = host
         self.port = port
-        app = Application(.development)
+        app = Application(.tls)
     }
     
     var baseUrl: String {
@@ -32,14 +37,93 @@ class FileServer: ObservableObject {
         }
         app.http.server.configuration.port = port
         app.routes.defaultMaxBodySize = "50MB"
+        guard let serverCertPath = Bundle.main.path(forResource: "crt", ofType: "pem"),
+              let serverKeyPath = Bundle.main.path(forResource: "key", ofType: "pem") else {
+            print("No certificates found")
+            return
+        }
+        do {
+            // Enable TLS.
+            app.http.server.configuration.tlsConfiguration = .makeServerConfiguration(
+                certificateChain: try NIOSSLCertificate.fromPEMFile(serverCertPath).map { .certificate($0) },
+                privateKey: .file(serverKeyPath)
+            )
+        } catch {
+            print("TLS configuration error \(error)")
+        }
     }
     
     func start() {
         Task(priority: .background) {
             do {
                 configure(app)
+                app.get { req async in
+                    "It works!"
+                }
+                
+                app.get("hello") { req async -> String in
+                    "Hello, world!"
+                }
+                
+                app.get("restaurants", "speciality", "chinese") { req async -> String in
+                    "restaurants/speciality/chinese"
+                }
+                
+                app.get("restaurants", "speciality", "indian") { req async -> String in
+                    "restaurants/speciality/indian"
+                }
+                
+                app.get("restaurants", "speciality", "thai") { req async -> String in
+                    "restaurants/speciality/thai"
+                }
+                
+                app.get("restaurants", "speciality", ":region") { req -> String in
+                    guard let region = req.parameters.get("region") else {
+                        throw Abort(.badRequest)
+                    }
+                    return "restaurants/speciality/\(region)"
+                }
+                
+                app.get("restaurants", ":location", "speciality", ":region") { req -> String in
+                    guard let locaton = req.parameters.get("location"), let region = req.parameters.get("region") else {
+                        throw Abort(.badRequest)
+                    }
+                    return "restaurants in \(locaton) with speciality \(region)"
+                }
+                
+                app.get("routeany", "*", "endpoint") { req -> String in
+                    return "This is anything route"
+                }
+                
+                app.get("routeany", "*") { req -> String in
+                    return "This is Catch All route zzz"
+                }
+                
+                app.get("routeany", "**") { req -> String in
+                    return "This is Catch All route"
+                }
+                
+                app.get("search") { req -> String in
+                    guard let keyword = req.query["keyword"] as String?, let page = req.query["page"] as String? else {
+                        throw Abort(.badRequest)
+                    }
+                    return "Search for Keyword \(keyword) on Page \(page)"
+                }
+                
+                let restaurants = app.grouped("restaurants")
+                
+                restaurants.get { req -> String in
+                    return "restaurants base route"
+                }
+                
+                restaurants.get("starRating", ":stars") { req -> String in
+                    guard let stars = req.parameters.get("stars") else {
+                        throw Abort(.badRequest)
+                    }
+                    return "restaurants/starRating/\(stars)"
+                }
                 try app.register(collection: FileWebRouteCollection())
-                try await app.execute()
+                try app.server.start()
             } catch {
                 fatalError(error.localizedDescription)
             }
@@ -47,7 +131,8 @@ class FileServer: ObservableObject {
     }
     
     func stop() {
-        app.http.server.shared.shutdown()
+        // Request server shutdown.
+        app.server.shutdown()
     }
     
     func loadFiles() {
